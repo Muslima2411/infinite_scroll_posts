@@ -16,6 +16,9 @@ class ProductsPageState extends State<ProductsPage> {
   List<Map<String, dynamic>> cartItems = [];
   bool isLoading = false;
   bool isError = false;
+  double total = 0;
+  double tax = 0;
+  double deliveryFee = 0;
 
   @override
   void initState() {
@@ -100,61 +103,109 @@ class ProductsPageState extends State<ProductsPage> {
 
   void _increaseQuantity(int index) async {
     setState(() {
-      // Update quantity locally first
-      cartItems[index]['quantity'] = cartItems[index]['quantity'] + 1;
+      cartItems[index]["quantity"] += 1; // Update locally first
+      total = _calculateTotalSum(); // Recalculate the total immediately
     });
 
-    final itemId = cartItems[index]['id'];
-    final newQuantity = cartItems[index]['quantity'];
-
     try {
-      final response =
-          await _dioService.updateCartItemQuantity(itemId, newQuantity);
+      final response = await _dioService.updateCartItemQuantity(
+        cartItems[index]["id"],
+        cartItems[index]["quantity"],
+      );
+
       if (response['status'] == 'success') {
-        debugPrint("Quantity updated on server successfully");
+        debugPrint("Quantity updated successfully on the server");
       } else {
         debugPrint("Failed to update quantity on server");
+        // Revert to the previous state in case of failure
+        setState(() {
+          cartItems[index]["quantity"] -= 1;
+          total = _calculateTotalSum(); // Recalculate total after reverting
+        });
       }
     } catch (e) {
-      debugPrint("Error updating quantity on server: $e");
+      debugPrint("Error increasing quantity: $e");
+      // Revert to the previous state in case of an error
+      setState(() {
+        cartItems[index]["quantity"] -= 1;
+        total = _calculateTotalSum(); // Recalculate total after reverting
+      });
     }
   }
 
   void _decreaseQuantity(int index) async {
-    setState(() {
-      // Ensure quantity doesn't go below 1
-      if (cartItems[index]['quantity'] > 1) {
-        cartItems[index]['quantity'] = (cartItems[index]['quantity'] ?? 0) - 1;
-      }
-    });
+    if (cartItems[index]["quantity"] > 1) {
+      // Optimistically update the UI before making the API call
+      setState(() {
+        cartItems[index]["quantity"] -= 1; // Decrease locally
+        total = _calculateTotalSum(); // Recalculate total immediately
+      });
 
-    final itemId = cartItems[index]['id'];
-    final newQuantity = cartItems[index]['quantity'];
+      try {
+        final response = await _dioService.updateCartItemQuantity(
+          cartItems[index]["id"],
+          cartItems[index]["quantity"],
+        );
 
-    try {
-      final response =
-          await _dioService.updateCartItemQuantity(itemId, newQuantity);
-      if (response['status'] == 'success') {
-        debugPrint("Quantity updated on server successfully");
-      } else {
-        debugPrint("Failed to update quantity on server");
+        if (response['status'] == 'success') {
+          debugPrint("Quantity decreased successfully on the server");
+        } else {
+          debugPrint("Failed to decrease quantity on server");
+          // Revert to the previous state if the update fails
+          setState(() {
+            cartItems[index]["quantity"] += 1; // Revert to previous quantity
+            total =
+                _calculateTotalSum(); // Recalculate the total after reverting
+          });
+        }
+      } catch (e) {
+        debugPrint("Error decreasing quantity: $e");
+        // Revert to the previous state in case of an error
+        setState(() {
+          cartItems[index]["quantity"] += 1; // Revert to previous quantity
+          total = _calculateTotalSum(); // Recalculate total after reverting
+        });
       }
-    } catch (e) {
-      debugPrint("Error updating quantity on server: $e");
     }
   }
 
   void _deleteItemFromCart(String id, int index) async {
     try {
       await _dioService.deleteItemFromCart(id);
-      debugPrint("deleleted succesfully");
-      cartItems.removeAt(index);
-      print(cartItems);
-      _fetchCartItems();
-      setState(() {});
+
+      setState(() {
+        cartItems.removeAt(index);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Item deleted successfully')),
+      );
     } catch (error) {
+      debugPrint("Error deleting item: $error");
+
+      // Show an error message if the deletion fails
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Failed to delete item from cart')),
+      );
+    }
+  }
+
+  void _deleteAllItems() async {
+    try {
+      await _dioService.deleteAllItemsFromCart();
+
+      setState(() {
+        cartItems.clear();
+        total = 0;
+        tax = 0;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All items deleted from cart')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to delete all items from cart')),
       );
     }
   }
@@ -187,15 +238,15 @@ class ProductsPageState extends State<ProductsPage> {
                             product: item,
                             onDelete: () {
                               _deleteItemFromCart(item["id"].toString(), index);
-                              setState(() {}); // Trigger rebuild within modal
+                              setState(() {}); // Update UI
                             },
                             onIncrease: () {
                               _increaseQuantity(index);
-                              setState(() {}); // Trigger rebuild within modal
+                              setState(() {}); // Update UI and total
                             },
                             onDecrease: () {
                               _decreaseQuantity(index);
-                              setState(() {}); // Trigger rebuild within modal
+                              setState(() {}); // Update UI and total
                             },
                           );
                         },
@@ -203,8 +254,30 @@ class ProductsPageState extends State<ProductsPage> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      "Total: \$${_calculateTotalSum()?.toStringAsFixed(2) ?? 0}",
+                      "Total: \$${_calculateTotalSum().toStringAsFixed(2)}",
                       style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "Tax (7%): \$${(_calculateTotalSum() * 0.07).toStringAsFixed(2)}",
+                      style: const TextStyle(fontSize: 14, color: Colors.grey),
+                    ),
+                    Text(
+                      "Delivery Fee: \$${_calculateDeliveryFee().toStringAsFixed(2)}",
+                      style: const TextStyle(fontSize: 14, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    MaterialButton(
+                      shape: const StadiumBorder(),
+                      minWidth: double.infinity,
+                      onPressed: () {
+                        _deleteAllItems();
+                        setState(() {});
+                      },
+                      color: Colors.green,
+                      child: const Text(
+                        "Order",
+                      ),
                     ),
                   ],
                 ),
@@ -216,12 +289,29 @@ class ProductsPageState extends State<ProductsPage> {
     );
   }
 
-  double? _calculateTotalSum() {
-    double total = 0;
-    for (var item in cartItems) {
-      total += item['price'] ?? 0 * item['quantity'] ?? 0;
+  double _calculateDeliveryFee() {
+    double total = _calculateTotalSum();
+    return total > 60 ? 0 : 10;
+  }
+
+  double _calculateTotalSum() {
+    double totalSum = 0;
+
+    if (cartItems.isEmpty) {
+      deliveryFee = 0;
+      tax = 0;
+      return totalSum;
     }
-    return total;
+
+    for (var item in cartItems) {
+      totalSum += (item["price"] ?? 0) * (item["quantity"] ?? 0);
+    }
+    tax = totalSum * 0.07;
+    totalSum += tax;
+    deliveryFee = totalSum > 60 ? 0 : 10;
+    totalSum += deliveryFee;
+
+    return totalSum;
   }
 
   @override

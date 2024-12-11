@@ -75,4 +75,20 @@ class DioService {
       throw Exception('Error deleting item from cart: $e');
     }
   }
+
+  Future<void> deleteAllItemsFromCart() async {
+    const url = 'http://10.0.2.2:8081/deleteall';
+
+    try {
+      final response = await _dio.delete(url);
+      if (response.statusCode == 200) {
+        print("All items deleted successfully.");
+      } else {
+        print("Failed to delete all items: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Error deleting all items: $e");
+      throw Exception("Error deleting all items.");
+    }
+  }
 }

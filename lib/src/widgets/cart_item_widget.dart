@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:infinite_scroll_posts/src/services/dio_service.dart';
 
 class CartItemWidget extends StatefulWidget {
   final Map<String, dynamic> product;
